@@ -9,6 +9,7 @@
 #include <assert.h>
 
 #include "pkcs11/cryptoki.h"
+#include "transport/serial_transport.h"
 
 #define TEST_ASSERT(cond, msg) do { \
     if (!(cond)) { \
@@ -17,10 +18,42 @@
     } \
 } while (0)
 
+static void test_serial_port_discovery(void) {
+    printf("--- Serial Port Autodiscovery & Candidate Prioritization Tests ---\n");
+
+#if defined(__APPLE__)
+    int score_tty3 = serial_score_candidate("/dev/tty.usbmodem31424103");
+    int score_tty1 = serial_score_candidate("/dev/tty.usbmodem31424101");
+    int score_cu3  = serial_score_candidate("/dev/cu.usbmodem31424103");
+    int score_cu1  = serial_score_candidate("/dev/cu.usbmodem31424101");
+
+    TEST_ASSERT(score_tty3 == 1000, "tty.usbmodem with suffix 3 must score 1000");
+    TEST_ASSERT(score_cu3 == 900, "cu.usbmodem with suffix 3 must score 900");
+    TEST_ASSERT(score_tty1 == 200, "tty.usbmodem with suffix 1 must score 200");
+    TEST_ASSERT(score_cu1 == 100, "cu.usbmodem with suffix 1 must score 100");
+
+    TEST_ASSERT(score_tty3 > score_tty1, "Suffix 3 (AT data) must have higher priority than suffix 1 (Console)");
+    TEST_ASSERT(score_tty3 > score_cu3, "tty.usbmodem must have higher priority than cu.usbmodem");
+    TEST_ASSERT(score_cu3 > score_tty1, "cu suffix 3 must have higher priority than suffix 1");
+
+    printf("[PASS] Candidate port scoring: suffix '3' (AT data, score=%d) prioritized over suffix '1' (console, score=%d)\n",
+           score_tty3, score_tty1);
+#elif !defined(_WIN32)
+    int score_acm1 = serial_score_candidate("/dev/ttyACM1");
+    int score_acm0 = serial_score_candidate("/dev/ttyACM0");
+    TEST_ASSERT(score_acm1 > score_acm0, "ttyACM1 must have higher priority than ttyACM0");
+    printf("[PASS] Candidate port scoring: ttyACM1 prioritized over ttyACM0\n");
+#endif
+    printf("------------------------------------------------------------------\n\n");
+}
+
 int main(void) {
     printf("====================================================\n");
     printf("  nRF52840 PKCS#11 Provider Library Test Suite      \n");
     printf("====================================================\n\n");
+
+    /* Test port autodiscovery scoring logic */
+    test_serial_port_discovery();
 
     CK_FUNCTION_LIST_PTR p11 = NULL;
     CK_RV rv = C_GetFunctionList(&p11);

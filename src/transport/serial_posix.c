@@ -280,43 +280,165 @@ int serial_transaction(serial_transport_t *tr, const char *cmd, char *resp_buf, 
     return status;
 }
 
+int serial_score_candidate(const char *path) {
+    if (!path) return -1;
+    size_t len = strlen(path);
+    char last = (len > 0) ? path[len - 1] : 0;
+
+#if defined(__APPLE__)
+    if (strstr(path, "tty.usbmodem") != NULL) {
+        if (last == '3') return 1000;
+        if (last != '1') return 600;
+        return 200; /* Console logger port */
+    }
+    if (strstr(path, "cu.usbmodem") != NULL) {
+        if (last == '3') return 900;
+        if (last != '1') return 500;
+        return 100; /* Console logger port */
+    }
+    if (last == '3') return 800;
+    if (last == '1') return 50;
+    return 400;
+#else
+    if (strstr(path, "ttyACM") != NULL) {
+        if (last == '1' || last == '3') return 1000;
+        if (last == '0') return 200;
+        return 500;
+    }
+    return 300;
+#endif
+}
+
+typedef struct {
+    char path[256];
+    int score;
+} port_candidate_t;
+
+static int compare_port_candidates(const void *a, const void *b) {
+    const port_candidate_t *ca = (const port_candidate_t *)a;
+    const port_candidate_t *cb = (const port_candidate_t *)b;
+    if (ca->score != cb->score) {
+        return cb->score - ca->score; /* Descending by score */
+    }
+    return strcmp(ca->path, cb->path); /* Deterministic ascending by path */
+}
+
 int serial_auto_open(serial_transport_t *tr) {
     if (!tr) return -EINVAL;
 
     /* 1. Explicit environment override takes precedence */
     const char *env_port = getenv("NRF52840_HSM_PORT");
     if (env_port && env_port[0] != '\0') {
+        if (is_debug()) {
+            fprintf(stderr, "[P11 SERIAL] Using explicit NRF52840_HSM_PORT override: %s\n", env_port);
+        }
         return serial_open(tr, env_port, 115200);
     }
 
-    /* 2. Scan ports on macOS / Linux */
+    /* 2. Explicit serial number targeting: NRF52840_HSM_SERIAL */
+    const char *env_serial = getenv("NRF52840_HSM_SERIAL");
+    if (env_serial && env_serial[0] != '\0') {
+        char direct_path[256];
+        size_t slen = strlen(env_serial);
+
+        if (strncmp(env_serial, "/dev/", 5) == 0) {
+            snprintf(direct_path, sizeof(direct_path), "%s", env_serial);
+        } else if (slen > 0 && env_serial[slen - 1] == '3') {
+            snprintf(direct_path, sizeof(direct_path), "/dev/tty.usbmodem%s", env_serial);
+        } else {
+            snprintf(direct_path, sizeof(direct_path), "/dev/tty.usbmodem%s3", env_serial);
+        }
+
+        if (is_debug()) {
+            fprintf(stderr, "[P11 SERIAL] Targeting serial '%s' via direct port %s\n", env_serial, direct_path);
+        }
+
+        if (serial_open(tr, direct_path, 115200) == 0) {
+            char resp[64];
+            int ret = serial_transaction(tr, "AT", resp, sizeof(resp), 500);
+            if (ret == 0) {
+                return 0;
+            }
+            serial_close(tr);
+        }
+
+        /* Fallback to cu.usbmodem<SERIAL>3 if tty.usbmodem was busy or unavailable */
+        if (strncmp(env_serial, "/dev/", 5) != 0) {
+            if (slen > 0 && env_serial[slen - 1] == '3') {
+                snprintf(direct_path, sizeof(direct_path), "/dev/cu.usbmodem%s", env_serial);
+            } else {
+                snprintf(direct_path, sizeof(direct_path), "/dev/cu.usbmodem%s3", env_serial);
+            }
+
+            if (is_debug()) {
+                fprintf(stderr, "[P11 SERIAL] Fallback targeting serial '%s' via direct port %s\n", env_serial, direct_path);
+            }
+
+            if (serial_open(tr, direct_path, 115200) == 0) {
+                char resp[64];
+                int ret = serial_transaction(tr, "AT", resp, sizeof(resp), 500);
+                if (ret == 0) {
+                    return 0;
+                }
+                serial_close(tr);
+            }
+        }
+    }
+
+    /* 3. Scan ports on macOS / Linux */
     DIR *dir = opendir("/dev");
     if (!dir) return -ENOENT;
 
     struct dirent *entry;
-    char candidates[16][256];
+    port_candidate_t candidates[64];
     int candidate_count = 0;
 
     while ((entry = readdir(dir)) != NULL) {
+        bool is_match = false;
 #if defined(__APPLE__)
-        /* Look for /dev/cu.usbmodem* */
-        if (strncmp(entry->d_name, "cu.usbmodem", 11) == 0) {
-            snprintf(candidates[candidate_count++], sizeof(candidates[0]), "/dev/%s", entry->d_name);
-            if (candidate_count >= 16) break;
+        /* Look for /dev/tty.usbmodem* and /dev/cu.usbmodem* */
+        if (strncmp(entry->d_name, "tty.usbmodem", 12) == 0 ||
+            strncmp(entry->d_name, "cu.usbmodem", 11) == 0) {
+            is_match = true;
         }
 #else
         /* Look for /dev/ttyACM* */
         if (strncmp(entry->d_name, "ttyACM", 6) == 0) {
-            snprintf(candidates[candidate_count++], sizeof(candidates[0]), "/dev/%s", entry->d_name);
-            if (candidate_count >= 16) break;
+            is_match = true;
         }
 #endif
+        if (!is_match) {
+            continue;
+        }
+
+        /* If NRF52840_HSM_SERIAL was set, only retain matching device entries */
+        if (env_serial && env_serial[0] != '\0') {
+            if (strstr(entry->d_name, env_serial) == NULL) {
+                continue;
+            }
+        }
+
+        snprintf(candidates[candidate_count].path, sizeof(candidates[candidate_count].path), "/dev/%s", entry->d_name);
+        candidates[candidate_count].score = serial_score_candidate(candidates[candidate_count].path);
+        candidate_count++;
+        if (candidate_count >= 64) break;
     }
     closedir(dir);
 
-    /* Test each candidate port with AT ping */
-    for (int i = candidate_count - 1; i >= 0; i--) {
-        if (serial_open(tr, candidates[i], 115200) == 0) {
+    /* Sort candidates by priority score descending (suffix '3' first, suffix '1' last) */
+    if (candidate_count > 1) {
+        qsort(candidates, candidate_count, sizeof(port_candidate_t), compare_port_candidates);
+    }
+
+    if (is_debug()) {
+        for (int i = 0; i < candidate_count; i++) {
+            fprintf(stderr, "[P11 SERIAL] Candidate [%d]: %s (score=%d)\n", i, candidates[i].path, candidates[i].score);
+        }
+    }
+
+    /* Test each candidate port in prioritized order with AT ping */
+    for (int i = 0; i < candidate_count; i++) {
+        if (serial_open(tr, candidates[i].path, 115200) == 0) {
             char resp[64];
             int ret = serial_transaction(tr, "AT", resp, sizeof(resp), 500);
             if (ret == 0) {

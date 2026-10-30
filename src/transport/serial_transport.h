@@ -31,6 +31,7 @@ typedef struct serial_transport {
 int serial_init(serial_transport_t *tr);
 int serial_open(serial_transport_t *tr, const char *port_path, int baudrate);
 int serial_auto_open(serial_transport_t *tr);
+int serial_score_candidate(const char *path);
 void serial_close(serial_transport_t *tr);
 bool serial_is_open(const serial_transport_t *tr);
 int serial_flush(serial_transport_t *tr);

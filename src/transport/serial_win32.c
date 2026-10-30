@@ -220,6 +220,11 @@ int serial_transaction(serial_transport_t *tr, const char *cmd, char *resp_buf, 
     return status;
 }
 
+int serial_score_candidate(const char *path) {
+    (void)path;
+    return 100;
+}
+
 int serial_auto_open(serial_transport_t *tr) {
     if (!tr) return -1;
     const char *env_port = getenv("NRF52840_HSM_PORT");

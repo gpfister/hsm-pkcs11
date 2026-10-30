@@ -29,8 +29,12 @@ CK_RV C_GenerateKeyPair(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
         return CKR_SESSION_HANDLE_INVALID;
     }
 
-    if (!ctx->user_logged_in) {
+    if (!ctx->user_logged_in && !ctx->so_logged_in) {
         return CKR_USER_NOT_LOGGED_IN;
+    }
+
+    if (!(ctx->sessions[hSession - 1].flags & CKF_RW_SESSION)) {
+        return CKR_SESSION_READ_ONLY;
     }
 
     /* Extract requested key ID and label if supplied */
@@ -89,6 +93,11 @@ CK_RV C_GenerateKeyPair(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
 
     uint8_t pubkey[65];
     CK_RV rv = at_keygen(ctx->transport, target_key_id, "EC_P256", pubkey);
+    if (rv == CKR_USER_NOT_LOGGED_IN) {
+        p11_session_notify_device_lock(ctx);
+        pthread_mutex_unlock(&ctx->lock);
+        return rv;
+    }
     if (rv != CKR_OK) {
         pthread_mutex_unlock(&ctx->lock);
         return rv;
@@ -109,6 +118,15 @@ CK_RV C_GenerateKeyPair(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
 
     *phPublicKey = P11_MAKE_PUB_HANDLE(target_key_id);
     *phPrivateKey = P11_MAKE_PRIV_HANDLE(target_key_id);
+
+    /* Gracefully handle device self-locking post-keygen */
+    if (ctx->transport && serial_is_open(ctx->transport)) {
+        bool auth = false;
+        int retries = 0, keycount = 0;
+        if (at_get_status(ctx->transport, &auth, &retries, &keycount) == CKR_OK && !auth) {
+            p11_session_notify_device_lock(ctx);
+        }
+    }
 
     pthread_mutex_unlock(&ctx->lock);
     p11_log("C_GenerateKeyPair created key_id=%d pub_handle=%lu priv_handle=%lu",
@@ -132,6 +150,10 @@ CK_RV C_SignInit(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism, CK_OBJ
 
     if (!P11_HANDLE_IS_VALID(hKey) || !P11_HANDLE_IS_PRIVATE(hKey)) {
         return CKR_KEY_HANDLE_INVALID;
+    }
+
+    if (!ctx->user_logged_in) {
+        return CKR_USER_NOT_LOGGED_IN;
     }
 
     uint8_t key_id = P11_HANDLE_TO_KEY_ID(hKey);
@@ -162,6 +184,10 @@ CK_RV C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ulDataLen,
 
     if (hSession == 0 || hSession > P11_MAX_SESSIONS || !ctx->sessions[hSession - 1].in_use) {
         return CKR_SESSION_HANDLE_INVALID;
+    }
+
+    if (!ctx->user_logged_in) {
+        return CKR_USER_NOT_LOGGED_IN;
     }
 
     p11_session_t *s = &ctx->sessions[hSession - 1];
@@ -196,9 +222,20 @@ CK_RV C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ulDataLen,
     /* Operation completed: reset sign state */
     s->sign_ctx.active = false;
 
-    if (rv == CKR_OK) {
+    if (rv == CKR_USER_NOT_LOGGED_IN) {
+        p11_session_notify_device_lock(ctx);
+    } else if (rv == CKR_OK) {
         memcpy(pSignature, sig_raw, sig_len);
         *pulSignatureLen = sig_len;
+
+        /* Gracefully handle device self-locking post-signing */
+        if (ctx->transport && serial_is_open(ctx->transport)) {
+            bool auth = false;
+            int retries = 0, keycount = 0;
+            if (at_get_status(ctx->transport, &auth, &retries, &keycount) == CKR_OK && !auth) {
+                p11_session_notify_device_lock(ctx);
+            }
+        }
     }
 
     pthread_mutex_unlock(&ctx->lock);

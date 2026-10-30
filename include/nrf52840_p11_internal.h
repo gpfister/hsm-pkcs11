@@ -89,6 +89,7 @@ typedef struct p11_global_ctx {
     p11_session_t sessions[P11_MAX_SESSIONS];
 
     bool user_logged_in;
+    bool so_logged_in;
     int pin_retries;
 } p11_global_ctx_t;
 
@@ -100,6 +101,10 @@ CK_RV p11_refresh_keys(p11_global_ctx_t *ctx);
 
 /* Ensure transport is open */
 CK_RV p11_ensure_transport_open(p11_global_ctx_t *ctx);
+
+/* Session state machine helpers */
+void p11_session_notify_device_lock(p11_global_ctx_t *ctx);
+CK_RV p11_session_sync_state(p11_global_ctx_t *ctx);
 
 /* Logging helper */
 void p11_log(const char *fmt, ...);

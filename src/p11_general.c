@@ -14,6 +14,7 @@
 static p11_global_ctx_t g_p11_ctx = {
     .initialized = false,
     .user_logged_in = false,
+    .so_logged_in = false,
     .pin_retries = 3,
     .token_present = false,
 };
@@ -431,6 +432,7 @@ CK_RV C_Finalize(CK_VOID_PTR pReserved) {
     ctx->initialized = false;
     ctx->token_present = false;
     ctx->user_logged_in = false;
+    ctx->so_logged_in = false;
 
     pthread_mutex_unlock(&ctx->lock);
     pthread_mutex_destroy(&ctx->lock);

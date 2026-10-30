@@ -207,10 +207,48 @@ CK_RV C_InitToken(CK_SLOT_ID slotID, CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen, CK
     CK_RV rv = p11_ensure_transport_open(ctx);
     if (rv != CKR_OK) return rv;
 
-    return at_reset(ctx->transport);
+    pthread_mutex_lock(&ctx->lock);
+
+    /* C_InitToken can only be called when no user is logged in (PKCS#11 v2.40) */
+    if (ctx->user_logged_in || ctx->so_logged_in) {
+        pthread_mutex_unlock(&ctx->lock);
+        return CKR_USER_ALREADY_LOGGED_IN;
+    }
+
+    rv = at_reset(ctx->transport);
+    if (rv == CKR_OK) {
+        p11_session_notify_device_lock(ctx);
+        ctx->pin_retries = 3;
+    }
+
+    pthread_mutex_unlock(&ctx->lock);
+
+    if (rv == CKR_OK) {
+        p11_refresh_keys(ctx);
+    }
+    return rv;
 }
 
 CK_RV C_InitPIN(CK_SESSION_HANDLE hSession, CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen) {
-    (void)hSession; (void)pPin; (void)ulPinLen;
+    if (!pPin) return CKR_ARGUMENTS_BAD;
+    if (ulPinLen < 4 || ulPinLen > 16) return CKR_PIN_LEN_RANGE;
+
+    p11_global_ctx_t *ctx = p11_get_ctx();
+    if (!ctx->initialized) return CKR_CRYPTOKI_NOT_INITIALIZED;
+
+    pthread_mutex_lock(&ctx->lock);
+
+    if (hSession == 0 || hSession > P11_MAX_SESSIONS || !ctx->sessions[hSession - 1].in_use) {
+        pthread_mutex_unlock(&ctx->lock);
+        return CKR_SESSION_HANDLE_INVALID;
+    }
+
+    /* C_InitPIN can only be called in CKS_RW_SO_FUNCTIONS state (PKCS#11 v2.40) */
+    if (!ctx->so_logged_in || ctx->sessions[hSession - 1].state != CKS_RW_SO_FUNCTIONS) {
+        pthread_mutex_unlock(&ctx->lock);
+        return CKR_USER_NOT_LOGGED_IN;
+    }
+
+    pthread_mutex_unlock(&ctx->lock);
     return CKR_OK;
 }

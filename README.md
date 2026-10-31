@@ -11,8 +11,8 @@ PKCS#11 (Cryptoki v2.40) Shared Library Provider for the Nordic Semiconductor nR
   - `C_GenerateRandom`: TRNG random number generation.
 - **Cross-Platform**: Builds on macOS (`.dylib`), Linux (`.so`), and Windows (`.dll`).
 - **Auto-Discovery & Serial Targeting**:
-  - Auto-discovers physical USB Dongle via CDC-ACM UART interfaces.
-  - Prioritizes macOS device nodes with suffix '3' (AT data channel, e.g. `/dev/tty.usbmodem*3`) over suffix '1' (Zephyr console logger).
+  - Auto-discovers physical USB Dongle via CDC-ACM UART interfaces (`VID 0x1209`, `PID 0x0001`, Protocol ID `0x0002`).
+  - Prioritizes macOS device nodes with suffix '3' (AT data channel, e.g. `/dev/tty.usbmodem*3`) over suffix '1' (Zephyr console logger, Protocol ID `0x0001`).
   - Supports `NRF52840_HSM_SERIAL` targeting `/dev/tty.usbmodem<SERIAL>3`.
   - Supports `NRF52840_HSM_PORT` override for explicit device paths or virtual pseudo-terminal (PTY) simulation.
   - Supports `NRF52840_HSM_DEBUG=1` for detailed serial protocol traffic traces.

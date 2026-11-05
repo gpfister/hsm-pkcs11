@@ -14,7 +14,7 @@ Cryptoki v2.40 shared library provider enabling standard tooling (such as OpenSC
   - `C_GenerateRandom`: TRNG random number generation.
 - **Cross-Platform**: Builds on macOS (`.dylib`), Linux (`.so`), and Windows (`.dll`).
 - **Auto-Discovery & Serial Targeting**:
-  - Auto-discovers connected USB HSM devices via CDC-ACM UART interfaces (`VID 0x1209`, `PID 0x0001`, Protocol ID `0x0002`).
+  - Auto-discovers connected USB HSM devices via CDC-ACM UART interfaces (`VID 0x1209`, `PID 0x0001`, Protocol ID `0x01` per ADR-0013).
   - Prioritizes device nodes corresponding to the dedicated AT data communication channel (e.g., macOS `/dev/tty.usbmodem*3`) over diagnostic console logger interfaces (Protocol ID `0x0001`).
   - Supports `NRF52840_HSM_SERIAL` targeting `/dev/tty.usbmodem<SERIAL>3`.
   - Supports `NRF52840_HSM_PORT` override for explicit device paths or virtual pseudo-terminal (PTY) simulation.

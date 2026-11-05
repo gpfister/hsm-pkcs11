@@ -19,7 +19,7 @@ CK_RV at_error_to_ckr(int cme_code);
 
 CK_RV at_ping(serial_transport_t *tr);
 CK_RV at_get_info(serial_transport_t *tr, char *fw, size_t fw_len, char *hw, size_t hw_len, char *uid, size_t uid_len, char *boot, size_t boot_len);
-CK_RV at_get_status(serial_transport_t *tr, bool *auth, int *retries, int *keycount);
+CK_RV at_get_status(serial_transport_t *tr, bool *auth, int *retries, int *keycount, bool *configured, char *method, size_t method_len);
 CK_RV at_auth(serial_transport_t *tr, const char *pin);
 CK_RV at_lock(serial_transport_t *tr);
 CK_RV at_reset(serial_transport_t *tr);

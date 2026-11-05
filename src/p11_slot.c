@@ -87,6 +87,8 @@ CK_RV C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo) {
     p11_ensure_transport_open(ctx);
     if (!ctx->token_present) return CKR_TOKEN_NOT_PRESENT;
 
+    p11_session_sync_state(ctx);
+
     pad_string(pInfo->label, sizeof(pInfo->label), P11_TOKEN_LABEL);
     pad_string(pInfo->manufacturerID, sizeof(pInfo->manufacturerID), P11_MANUFACTURER_ID);
     pad_string(pInfo->model, sizeof(pInfo->model), P11_MODEL_NAME);
@@ -95,6 +97,13 @@ CK_RV C_GetTokenInfo(CK_SLOT_ID slotID, CK_TOKEN_INFO_PTR pInfo) {
     pad_string((CK_UTF8CHAR_PTR)pInfo->serialNumber, sizeof(pInfo->serialNumber), serial);
 
     pInfo->flags = CKF_RNG | CKF_LOGIN_REQUIRED | CKF_USER_PIN_INITIALIZED | CKF_TOKEN_INITIALIZED;
+
+    if (strcasecmp(ctx->auth_method, "SHAMIR") == 0) {
+        pInfo->flags |= CKF_PROTECTED_AUTHENTICATION_PATH;
+    } else if (strcasecmp(ctx->auth_method, "PIN") == 0) {
+        pInfo->flags &= ~CKF_PROTECTED_AUTHENTICATION_PATH;
+    }
+
     if (ctx->pin_retries == 0) {
         pInfo->flags |= CKF_USER_PIN_LOCKED;
     } else if (ctx->pin_retries == 1) {

@@ -123,7 +123,7 @@ CK_RV C_GenerateKeyPair(CK_SESSION_HANDLE hSession, CK_MECHANISM_PTR pMechanism,
     if (ctx->transport && serial_is_open(ctx->transport)) {
         bool auth = false;
         int retries = 0, keycount = 0;
-        if (at_get_status(ctx->transport, &auth, &retries, &keycount) == CKR_OK && !auth) {
+        if (at_get_status(ctx->transport, &auth, &retries, &keycount, NULL, NULL, 0) == CKR_OK && !auth) {
             p11_session_notify_device_lock(ctx);
         }
     }
@@ -232,7 +232,7 @@ CK_RV C_Sign(CK_SESSION_HANDLE hSession, CK_BYTE_PTR pData, CK_ULONG ulDataLen,
         if (ctx->transport && serial_is_open(ctx->transport)) {
             bool auth = false;
             int retries = 0, keycount = 0;
-            if (at_get_status(ctx->transport, &auth, &retries, &keycount) == CKR_OK && !auth) {
+            if (at_get_status(ctx->transport, &auth, &retries, &keycount, NULL, NULL, 0) == CKR_OK && !auth) {
                 p11_session_notify_device_lock(ctx);
             }
         }

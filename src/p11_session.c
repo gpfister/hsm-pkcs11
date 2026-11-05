@@ -41,11 +41,18 @@ CK_RV p11_session_sync_state(p11_global_ctx_t *ctx) {
     bool auth = false;
     int retries = 3;
     int keycount = 0;
-    CK_RV rv = at_get_status(ctx->transport, &auth, &retries, &keycount);
+    bool configured = true;
+    char method[16] = "PIN";
+    CK_RV rv = at_get_status(ctx->transport, &auth, &retries, &keycount, &configured, method, sizeof(method));
     if (rv == CKR_OK) {
         ctx->pin_retries = retries;
+        ctx->configured = configured;
+        strncpy(ctx->auth_method, method, sizeof(ctx->auth_method) - 1);
+        ctx->auth_method[sizeof(ctx->auth_method) - 1] = '\0';
         if (!auth && (ctx->user_logged_in || ctx->so_logged_in)) {
             p11_session_notify_device_lock(ctx);
+        } else if (auth) {
+            ctx->user_logged_in = true;
         }
     } else if (rv == CKR_USER_NOT_LOGGED_IN) {
         p11_session_notify_device_lock(ctx);
@@ -197,8 +204,15 @@ CK_RV C_GetSessionInfo(CK_SESSION_HANDLE hSession, CK_SESSION_INFO_PTR pInfo) {
             bool auth = false;
             int retries = 3;
             int keycount = 0;
-            if (at_get_status(ctx->transport, &auth, &retries, &keycount) == CKR_OK) {
+            bool configured = true;
+            char method[16] = "PIN";
+            if (at_get_status(ctx->transport, &auth, &retries, &keycount, &configured, method, sizeof(method)) == CKR_OK) {
                 ctx->pin_retries = retries;
+                ctx->configured = configured;
+                if (method[0] != '\0') {
+                    strncpy(ctx->auth_method, method, sizeof(ctx->auth_method) - 1);
+                    ctx->auth_method[sizeof(ctx->auth_method) - 1] = '\0';
+                }
                 if (!auth) {
                     p11_session_notify_device_lock(ctx);
                 }
@@ -216,8 +230,6 @@ CK_RV C_GetSessionInfo(CK_SESSION_HANDLE hSession, CK_SESSION_INFO_PTR pInfo) {
 }
 
 CK_RV C_Login(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType, CK_UTF8CHAR_PTR pPin, CK_ULONG ulPinLen) {
-    if (!pPin) return CKR_ARGUMENTS_BAD;
-    if (ulPinLen < 4 || ulPinLen > 16) return CKR_PIN_LEN_RANGE;
     if (userType != CKU_USER && userType != CKU_SO) return CKR_USER_TYPE_INVALID;
 
     p11_global_ctx_t *ctx = p11_get_ctx();
@@ -256,6 +268,68 @@ CK_RV C_Login(CK_SESSION_HANDLE hSession, CK_USER_TYPE userType, CK_UTF8CHAR_PTR
                 return CKR_SESSION_READ_ONLY_EXISTS;
             }
         }
+    }
+
+    /* Check device status */
+    bool auth = false;
+    int retries = 3;
+    int keycount = 0;
+    bool configured = true;
+    char method[16] = "PIN";
+    if (ctx->transport && serial_is_open(ctx->transport)) {
+        if (at_get_status(ctx->transport, &auth, &retries, &keycount, &configured, method, sizeof(method)) == CKR_OK) {
+            ctx->pin_retries = retries;
+            ctx->configured = configured;
+            if (method[0] != '\0') {
+                strncpy(ctx->auth_method, method, sizeof(ctx->auth_method) - 1);
+                ctx->auth_method[sizeof(ctx->auth_method) - 1] = '\0';
+            }
+        }
+    }
+
+    if (strcasecmp(ctx->auth_method, "SHAMIR") == 0) {
+        if (auth) {
+            ctx->pin_retries = 3;
+            if (userType == CKU_USER) {
+                ctx->user_logged_in = true;
+                ctx->so_logged_in = false;
+                for (int i = 0; i < P11_MAX_SESSIONS; i++) {
+                    if (ctx->sessions[i].in_use) {
+                        ctx->sessions[i].state = (ctx->sessions[i].flags & CKF_RW_SESSION)
+                            ? CKS_RW_USER_FUNCTIONS
+                            : CKS_RO_USER_FUNCTIONS;
+                    }
+                }
+            } else { /* CKU_SO */
+                ctx->so_logged_in = true;
+                ctx->user_logged_in = false;
+                for (int i = 0; i < P11_MAX_SESSIONS; i++) {
+                    if (ctx->sessions[i].in_use) {
+                        ctx->sessions[i].state = CKS_RW_SO_FUNCTIONS;
+                    }
+                }
+            }
+            pthread_mutex_unlock(&ctx->lock);
+
+            /* Refresh cached keys on token */
+            p11_refresh_keys(ctx);
+            p11_log("C_Login successful (Shamir pre-authenticated, userType=%lu)", (unsigned long)userType);
+            return CKR_OK;
+        } else {
+            fprintf(stderr, "Device is locked in Shamir mode. Unlock the HSM using 'gphsm unlock' before invoking PKCS#11 operations.\n");
+            pthread_mutex_unlock(&ctx->lock);
+            return CKR_PIN_INCORRECT;
+        }
+    }
+
+    /* METHOD == PIN (or fallback) */
+    if (!pPin) {
+        pthread_mutex_unlock(&ctx->lock);
+        return CKR_ARGUMENTS_BAD;
+    }
+    if (ulPinLen < 4 || ulPinLen > 16) {
+        pthread_mutex_unlock(&ctx->lock);
+        return CKR_PIN_LEN_RANGE;
     }
 
     /* Fail fast if PIN is blocked */

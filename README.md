@@ -1,9 +1,12 @@
-# HSM PKCS#11 Provider Library
+# libgphsm: Hardware Security Module PKCS#11 Provider Library
 
-Cryptoki v2.40 shared library provider enabling standard tools (such as OpenSC pkcs11-tool, OpenSSL pkcs11-provider, and OpenSSH) to perform hardware-isolated cryptographic operations using connected HSM USB keys.
+Cryptoki v2.40 shared library provider enabling standard tooling (such as OpenSC `pkcs11-tool`, OpenSSL `pkcs11-provider`, and OpenSSH `ssh-add -s`) to perform hardware-isolated cryptographic operations using connected HSM USB keys.
 
 ## Features
 - **Cryptoki v2.40 Standard Compliant**: Integrates directly with OpenSC (`pkcs11-tool`), OpenSSL (`pkcs11-provider`), OpenSSH (`ssh-add -s`), and GnuPG.
+- **Dual-Mode Authentication Support**:
+  - **PIN Mode**: In-band user authentication via `C_Login` using standard alphanumeric PIN.
+  - **Shamir Mode (3-of-5 Secret Sharing)**: Advertises `CKF_PROTECTED_AUTHENTICATION_PATH` in `C_GetTokenInfo`. When unlocked via `gphsm unlock`, `C_Login` bypasses PIN verification (`CKR_OK`). When locked, informs user to authenticate out-of-band via CLI before invoking PKCS#11 operations.
 - **AT ASCII Serial Transport**: Clean, line-buffered serial transport communicating over CDC-ACM UART (`115200 8N1`).
 - **Cryptographic Mechanisms**:
   - `CKM_EC_KEY_PAIR_GEN`: Hardware-isolated secp256r1 (NIST P-256) keypair generation via CryptoCell CC310.
@@ -21,7 +24,7 @@ Cryptoki v2.40 shared library provider enabling standard tools (such as OpenSC p
 
 ## Directory Structure
 ```text
-nrf52840-hsm-libpkcs11/
+libgphsm/
 ├── CMakeLists.txt
 ├── Makefile
 ├── README.md
@@ -61,14 +64,15 @@ cmake --build build
 ```
 
 The resulting dynamic library will be located at:
-- macOS: `build/libnrf52840_pkcs11.dylib`
-- Linux: `build/libnrf52840_pkcs11.so`
+- macOS: `build/libgphsm.dylib`
+- Linux: `build/libgphsm.so`
+- Windows: `build/libgphsm.dll`
 
 ---
 
 ## Testing
 ```bash
-# Run unit tests
+# Run unit and mock interface tests
 make test
 
 # Or run the test executable directly
@@ -85,21 +89,21 @@ NRF52840_HSM_PORT=/tmp/mock-hsm-pty ./build/test_p11_mock
 ### OpenSC `pkcs11-tool`
 ```bash
 # List slots and mechanisms
-pkcs11-tool --module build/libnrf52840_pkcs11.dylib -L
-pkcs11-tool --module build/libnrf52840_pkcs11.dylib -M
+pkcs11-tool --module build/libgphsm.dylib -L
+pkcs11-tool --module build/libgphsm.dylib -M
 
-# Generate EC P-256 keypair
-pkcs11-tool --module build/libnrf52840_pkcs11.dylib --login --pin 123456 \
+# Generate EC P-256 keypair (in PIN mode)
+pkcs11-tool --module build/libgphsm.dylib --login --pin 123456 \
   --keypairgen --key-type EC:prime256v1 --label "MyP256Key" --id 01
 
 # Sign pre-hashed SHA-256 digest
 openssl dgst -sha256 -binary data.txt > digest.bin
-pkcs11-tool --module build/libnrf52840_pkcs11.dylib --login --pin 123456 \
+pkcs11-tool --module build/libgphsm.dylib --login --pin 123456 \
   --sign --id 01 --mechanism ECDSA --input-file digest.bin --output-file sig.raw
 ```
 
 ### OpenSSH
 ```bash
 # Add HSM key to ssh-agent
-ssh-add -s build/libnrf52840_pkcs11.dylib
+ssh-add -s build/libgphsm.dylib
 ```

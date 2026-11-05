@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(nrf52840_pkcs11 C)
+project(libgphsm C)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -29,7 +29,7 @@ else()
 endif()
 
 # PKCS#11 shared library
-add_library(nrf52840_pkcs11 SHARED
+add_library(libgphsm SHARED
     src/p11_general.c
     src/p11_slot.c
     src/p11_session.c
@@ -39,12 +39,13 @@ add_library(nrf52840_pkcs11 SHARED
     ${TRANSPORT_SOURCES}
 )
 
-target_link_libraries(nrf52840_pkcs11 PRIVATE Threads::Threads)
+target_link_libraries(libgphsm PRIVATE Threads::Threads)
 
-set_target_properties(nrf52840_pkcs11 PROPERTIES
+set_target_properties(libgphsm PROPERTIES
     C_VISIBILITY_PRESET default
     VISIBILITY_INLINES_HIDDEN OFF
-    OUTPUT_NAME "nrf52840_pkcs11"
+    OUTPUT_NAME "gphsm"
+    PREFIX "lib"
 )
 
 # Test executable
@@ -54,5 +55,16 @@ add_executable(test_p11_mock
     tests/test_p11_mock.c
 )
 
-target_link_libraries(test_p11_mock PRIVATE nrf52840_pkcs11 Threads::Threads)
+target_link_libraries(test_p11_mock PRIVATE libgphsm Threads::Threads)
 add_test(NAME test_p11_mock COMMAND test_p11_mock)
+
+# Installation targets
+include(GNUInstallDirs)
+install(TARGETS libgphsm
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.h"
+)

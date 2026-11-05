@@ -1,5 +1,5 @@
 # ==============================================================================
-# nrf52840-hsm-libpkcs11 Makefile
+# libgphsm Makefile
 # PKCS#11 v2.40 Shared Library Provider Build Automation
 # ==============================================================================
 
@@ -7,7 +7,7 @@ BUILD_DIR ?= build
 CMAKE ?= cmake
 CTEST ?= ctest
 
-.PHONY: all build test clean
+.PHONY: all build test clean debug
 
 all: build
 

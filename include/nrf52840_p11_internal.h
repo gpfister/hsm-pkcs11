@@ -91,6 +91,8 @@ typedef struct p11_global_ctx {
     bool user_logged_in;
     bool so_logged_in;
     int pin_retries;
+    bool configured;
+    char auth_method[16]; /* "NONE", "PIN", "SHAMIR" */
 } p11_global_ctx_t;
 
 /* Singleton context access */

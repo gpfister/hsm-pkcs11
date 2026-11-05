@@ -17,6 +17,8 @@ static p11_global_ctx_t g_p11_ctx = {
     .so_logged_in = false,
     .pin_retries = 3,
     .token_present = false,
+    .configured = true,
+    .auth_method = "PIN",
 };
 
 static serial_transport_t g_serial_tr;
@@ -61,9 +63,14 @@ CK_RV p11_ensure_transport_open(p11_global_ctx_t *ctx) {
     bool auth = false;
     int retries = 3;
     int keycount = 0;
-    if (at_get_status(ctx->transport, &auth, &retries, &keycount) == CKR_OK) {
+    bool configured = true;
+    char method[16] = "PIN";
+    if (at_get_status(ctx->transport, &auth, &retries, &keycount, &configured, method, sizeof(method)) == CKR_OK) {
         ctx->user_logged_in = auth;
         ctx->pin_retries = retries;
+        ctx->configured = configured;
+        strncpy(ctx->auth_method, method, sizeof(ctx->auth_method) - 1);
+        ctx->auth_method[sizeof(ctx->auth_method) - 1] = '\0';
     }
 
     return CKR_OK;

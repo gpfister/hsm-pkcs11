@@ -7,9 +7,16 @@
 #include <string.h>
 #include <stdbool.h>
 #include <assert.h>
+#if !defined(_WIN32)
+#include <sys/socket.h>
+#include <unistd.h>
+#include <pthread.h>
+#endif
 
 #include "pkcs11/cryptoki.h"
 #include "transport/serial_transport.h"
+#include "transport/at_client.h"
+#include "nrf52840_p11_internal.h"
 
 #define TEST_ASSERT(cond, msg) do { \
     if (!(cond)) { \
@@ -46,6 +53,203 @@ static void test_serial_port_discovery(void) {
 #endif
     printf("------------------------------------------------------------------\n\n");
 }
+
+#if !defined(_WIN32)
+typedef struct {
+    int fd;
+    const char *resp;
+} mock_resp_ctx_t;
+
+static void *mock_responder_thread(void *arg) {
+    mock_resp_ctx_t *mctx = (mock_resp_ctx_t *)arg;
+    char buf[256];
+    ssize_t n = read(mctx->fd, buf, sizeof(buf) - 1);
+    if (n > 0) {
+        buf[n] = '\0';
+        write(mctx->fd, mctx->resp, strlen(mctx->resp));
+    }
+    return NULL;
+}
+
+static void test_dual_mode_authentication_semantics(CK_FUNCTION_LIST_PTR p11) {
+    printf("--- Dual-Mode Authentication (PIN vs Shamir) Tests ---\n");
+
+    p11_global_ctx_t *ctx = p11_get_ctx();
+    bool saved_present = ctx->token_present;
+    serial_transport_t *saved_tr = ctx->transport;
+    char saved_method[16];
+    strncpy(saved_method, ctx->auth_method, sizeof(saved_method) - 1);
+    saved_method[sizeof(saved_method) - 1] = '\0';
+
+    ctx->token_present = true;
+
+    /* 1. Test C_GetTokenInfo with Shamir mode flag via mock transport */
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+        serial_transport_t mock_tr;
+        serial_init(&mock_tr);
+        mock_tr.fd = sv[0];
+        mock_tr.is_open = true;
+        ctx->transport = &mock_tr;
+
+        mock_resp_ctx_t mctx = {
+            .fd = sv[1],
+            .resp = "\r\n+STATUS: CONFIGURED=1,AUTH=0,METHOD=SHAMIR,RETRIES=3,KEYCOUNT=2\r\nOK\r\n",
+        };
+        pthread_t th;
+        pthread_create(&th, NULL, mock_responder_thread, &mctx);
+
+        CK_TOKEN_INFO tinfo;
+        CK_RV rv = p11->C_GetTokenInfo(P11_SLOT_ID, &tinfo);
+        pthread_join(th, NULL);
+        close(sv[0]);
+        close(sv[1]);
+
+        TEST_ASSERT(rv == CKR_OK, "C_GetTokenInfo failed in SHAMIR mode");
+        TEST_ASSERT((tinfo.flags & CKF_PROTECTED_AUTHENTICATION_PATH) != 0,
+                    "SHAMIR mode must set CKF_PROTECTED_AUTHENTICATION_PATH");
+        printf("[PASS] C_GetTokenInfo: SHAMIR mode sets CKF_PROTECTED_AUTHENTICATION_PATH\n");
+    }
+
+    /* 2. Test C_GetTokenInfo with PIN mode flag via mock transport */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+        serial_transport_t mock_tr;
+        serial_init(&mock_tr);
+        mock_tr.fd = sv[0];
+        mock_tr.is_open = true;
+        ctx->transport = &mock_tr;
+
+        mock_resp_ctx_t mctx = {
+            .fd = sv[1],
+            .resp = "\r\n+STATUS: CONFIGURED=1,AUTH=0,METHOD=PIN,RETRIES=3,KEYCOUNT=2\r\nOK\r\n",
+        };
+        pthread_t th;
+        pthread_create(&th, NULL, mock_responder_thread, &mctx);
+
+        CK_TOKEN_INFO tinfo;
+        CK_RV rv = p11->C_GetTokenInfo(P11_SLOT_ID, &tinfo);
+        pthread_join(th, NULL);
+        close(sv[0]);
+        close(sv[1]);
+
+        TEST_ASSERT(rv == CKR_OK, "C_GetTokenInfo failed in PIN mode");
+        TEST_ASSERT((tinfo.flags & CKF_PROTECTED_AUTHENTICATION_PATH) == 0,
+                    "PIN mode must clear CKF_PROTECTED_AUTHENTICATION_PATH");
+        printf("[PASS] C_GetTokenInfo: PIN mode clears CKF_PROTECTED_AUTHENTICATION_PATH\n");
+    }
+
+    /* 3. Test at_get_status parser across diverse response formats */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+        serial_transport_t mock_tr;
+        serial_init(&mock_tr);
+        mock_tr.fd = sv[0];
+        mock_tr.is_open = true;
+
+        mock_resp_ctx_t mctx = {
+            .fd = sv[1],
+            .resp = "\r\n+STATUS: CONFIGURED=1,AUTH=0,METHOD=SHAMIR,RETRIES=3,KEYCOUNT=2\r\nOK\r\n",
+        };
+        pthread_t th;
+        pthread_create(&th, NULL, mock_responder_thread, &mctx);
+
+        bool auth = false;
+        int retries = 0, keycount = 0;
+        bool configured = false;
+        char method[16] = {0};
+
+        CK_RV rv = at_get_status(&mock_tr, &auth, &retries, &keycount, &configured, method, sizeof(method));
+        pthread_join(th, NULL);
+        close(sv[0]);
+        close(sv[1]);
+
+        TEST_ASSERT(rv == CKR_OK, "at_get_status failed");
+        TEST_ASSERT(auth == false, "Expected auth == false");
+        TEST_ASSERT(configured == true, "Expected configured == true");
+        TEST_ASSERT(strcmp(method, "SHAMIR") == 0, "Expected method == SHAMIR");
+        TEST_ASSERT(retries == 3, "Expected retries == 3");
+        TEST_ASSERT(keycount == 2, "Expected keycount == 2");
+        printf("[PASS] at_get_status: Parsed CONFIGURED=1, AUTH=0, METHOD=SHAMIR, RETRIES=3, KEYCOUNT=2\n");
+    }
+
+    /* 4. Test C_Login in Shamir mode when device is locked (AUTH == 0) */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+        serial_transport_t mock_tr;
+        serial_init(&mock_tr);
+        mock_tr.fd = sv[0];
+        mock_tr.is_open = true;
+        ctx->transport = &mock_tr;
+
+        mock_resp_ctx_t mctx = {
+            .fd = sv[1],
+            .resp = "\r\n+STATUS: CONFIGURED=1,AUTH=0,METHOD=SHAMIR,RETRIES=3,KEYCOUNT=2\r\nOK\r\n",
+        };
+        pthread_t th;
+        pthread_create(&th, NULL, mock_responder_thread, &mctx);
+
+        /* Prepare session 0 */
+        ctx->sessions[0].in_use = true;
+        ctx->sessions[0].handle = 1;
+        ctx->sessions[0].slot_id = P11_SLOT_ID;
+        ctx->sessions[0].state = CKS_RW_PUBLIC_SESSION;
+        ctx->sessions[0].flags = CKF_SERIAL_SESSION | CKF_RW_SESSION;
+        ctx->user_logged_in = false;
+        ctx->so_logged_in = false;
+        strncpy(ctx->auth_method, "SHAMIR", sizeof(ctx->auth_method) - 1);
+
+        CK_RV rv = p11->C_Login(1, CKU_USER, NULL, 0);
+        pthread_join(th, NULL);
+        close(sv[0]);
+        close(sv[1]);
+
+        TEST_ASSERT(rv == CKR_PIN_INCORRECT, "Locked Shamir mode must return CKR_PIN_INCORRECT");
+        printf("[PASS] C_Login: Locked Shamir mode returns CKR_PIN_INCORRECT with prompt guidance\n");
+    }
+
+    /* 5. Test C_Login in Shamir mode when device is already unlocked (AUTH == 1) */
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0) {
+        serial_transport_t mock_tr;
+        serial_init(&mock_tr);
+        mock_tr.fd = sv[0];
+        mock_tr.is_open = true;
+        ctx->transport = &mock_tr;
+
+        mock_resp_ctx_t mctx = {
+            .fd = sv[1],
+            .resp = "\r\n+STATUS: CONFIGURED=1,AUTH=1,METHOD=SHAMIR,RETRIES=3,KEYCOUNT=2\r\nOK\r\n",
+        };
+        pthread_t th;
+        pthread_create(&th, NULL, mock_responder_thread, &mctx);
+
+        ctx->sessions[0].in_use = true;
+        ctx->sessions[0].handle = 1;
+        ctx->sessions[0].slot_id = P11_SLOT_ID;
+        ctx->sessions[0].state = CKS_RW_PUBLIC_SESSION;
+        ctx->sessions[0].flags = CKF_SERIAL_SESSION | CKF_RW_SESSION;
+        ctx->user_logged_in = false;
+        ctx->so_logged_in = false;
+        strncpy(ctx->auth_method, "SHAMIR", sizeof(ctx->auth_method) - 1);
+
+        CK_RV rv = p11->C_Login(1, CKU_USER, NULL, 0);
+        pthread_join(th, NULL);
+        close(sv[0]);
+        close(sv[1]);
+
+        TEST_ASSERT(rv == CKR_OK, "Unlocked Shamir mode must return CKR_OK");
+        TEST_ASSERT(ctx->sessions[0].state == CKS_RW_USER_FUNCTIONS, "Session must transition to CKS_RW_USER_FUNCTIONS");
+        printf("[PASS] C_Login: Unlocked Shamir mode returns CKR_OK and sets CKS_RW_USER_FUNCTIONS\n");
+
+        /* Reset session */
+        ctx->user_logged_in = false;
+        ctx->sessions[0].in_use = false;
+    }
+
+    /* Restore context */
+    ctx->transport = saved_tr;
+    ctx->token_present = saved_present;
+    strncpy(ctx->auth_method, saved_method, sizeof(ctx->auth_method) - 1);
+    printf("------------------------------------------------------\n\n");
+}
+#endif
 
 int main(void) {
     printf("====================================================\n");
@@ -120,6 +324,11 @@ int main(void) {
     TEST_ASSERT(rv == CKR_OK, "C_GetMechanismInfo failed for CKM_ECDSA");
     TEST_ASSERT(minfo.ulMinKeySize == 256 && minfo.ulMaxKeySize == 256, "Invalid key sizes for CKM_ECDSA");
     printf("[PASS] C_GetMechanismInfo: CKM_ECDSA 256-bit P-256 confirmed\n");
+
+#if !defined(_WIN32)
+    /* Test Dual-Mode Authentication (PIN vs Shamir) Semantics */
+    test_dual_mode_authentication_semantics(p11);
+#endif
 
     /* Check if token/mock is active for session and crypto tests */
     CK_SESSION_HANDLE hRWSession = CK_INVALID_HANDLE;

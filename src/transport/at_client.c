@@ -80,28 +80,35 @@ static char *extract_quoted_val(const char *src, const char *key, char *dst, siz
     if (!src || !key || !dst || dst_len == 0) return NULL;
     dst[0] = '\0';
 
-    const char *p = strstr(src, key);
-    if (!p) return NULL;
-
-    p += strlen(key);
-    while (*p == ' ' || *p == '=') p++;
-
-    if (*p == '\"') {
-        p++;
-        size_t idx = 0;
-        while (*p && *p != '\"' && idx + 1 < dst_len) {
-            dst[idx++] = *p++;
+    size_t klen = strlen(key);
+    const char *p = src;
+    while ((p = strstr(p, key)) != NULL) {
+        if (p == src || isspace((unsigned char)*(p - 1)) || *(p - 1) == ',' || *(p - 1) == ':' || *(p - 1) == '+') {
+            const char *after = p + klen;
+            while (*after == ' ') after++;
+            if (*after == '=') {
+                p = after + 1;
+                while (*p == ' ') p++;
+                if (*p == '\"') {
+                    p++;
+                    size_t idx = 0;
+                    while (*p && *p != '\"' && idx + 1 < dst_len) {
+                        dst[idx++] = *p++;
+                    }
+                    dst[idx] = '\0';
+                    return dst;
+                }
+                size_t idx = 0;
+                while (*p && *p != ',' && *p != '\r' && *p != '\n' && !isspace((unsigned char)*p) && idx + 1 < dst_len) {
+                    dst[idx++] = *p++;
+                }
+                dst[idx] = '\0';
+                return dst;
+            }
         }
-        dst[idx] = '\0';
-        return dst;
+        p += klen;
     }
-
-    size_t idx = 0;
-    while (*p && *p != ',' && *p != '\r' && *p != '\n' && idx + 1 < dst_len) {
-        dst[idx++] = *p++;
-    }
-    dst[idx] = '\0';
-    return dst;
+    return NULL;
 }
 
 CK_RV at_ping(serial_transport_t *tr) {
@@ -123,7 +130,7 @@ CK_RV at_get_info(serial_transport_t *tr, char *fw, size_t fw_len, char *hw, siz
     return CKR_OK;
 }
 
-CK_RV at_get_status(serial_transport_t *tr, bool *auth, int *retries, int *keycount) {
+CK_RV at_get_status(serial_transport_t *tr, bool *auth, int *retries, int *keycount, bool *configured, char *method, size_t method_len) {
     char resp[256];
     int ret = serial_transaction(tr, "AT+STATUS?", resp, sizeof(resp), 1500);
     if (ret != 0) return at_error_to_ckr(ret);
@@ -145,6 +152,20 @@ CK_RV at_get_status(serial_transport_t *tr, bool *auth, int *retries, int *keyco
         *keycount = 0;
         if (extract_quoted_val(resp, "KEYCOUNT", val, sizeof(val))) {
             *keycount = atoi(val);
+        }
+    }
+    if (configured) {
+        *configured = true;
+        if (extract_quoted_val(resp, "CONFIGURED", val, sizeof(val))) {
+            *configured = (atoi(val) != 0);
+        }
+    }
+    if (method && method_len > 0) {
+        strncpy(method, "PIN", method_len - 1);
+        method[method_len - 1] = '\0';
+        if (extract_quoted_val(resp, "METHOD", val, sizeof(val))) {
+            strncpy(method, val, method_len - 1);
+            method[method_len - 1] = '\0';
         }
     }
 

@@ -1,9 +1,9 @@
-# nrf52840-hsm-libpkcs11
+# HSM PKCS#11 Provider Library
 
-PKCS#11 (Cryptoki v2.40) Shared Library Provider for the Nordic Semiconductor nRF52840 HSM Dongle (`PCA10059`).
+Cryptoki v2.40 shared library provider enabling standard tools (such as OpenSC pkcs11-tool, OpenSSL pkcs11-provider, and OpenSSH) to perform hardware-isolated cryptographic operations using connected HSM USB keys.
 
 ## Features
-- **Cryptoki v2.40 Standard Compliant**: Integrates directly with OpenSC (`pkcs11-tool`), OpenSSL (`pkcs11-engine`), OpenSSH (`ssh-add -s`), and GnuPG.
+- **Cryptoki v2.40 Standard Compliant**: Integrates directly with OpenSC (`pkcs11-tool`), OpenSSL (`pkcs11-provider`), OpenSSH (`ssh-add -s`), and GnuPG.
 - **AT ASCII Serial Transport**: Clean, line-buffered serial transport communicating over CDC-ACM UART (`115200 8N1`).
 - **Cryptographic Mechanisms**:
   - `CKM_EC_KEY_PAIR_GEN`: Hardware-isolated secp256r1 (NIST P-256) keypair generation via CryptoCell CC310.
@@ -11,8 +11,8 @@ PKCS#11 (Cryptoki v2.40) Shared Library Provider for the Nordic Semiconductor nR
   - `C_GenerateRandom`: TRNG random number generation.
 - **Cross-Platform**: Builds on macOS (`.dylib`), Linux (`.so`), and Windows (`.dll`).
 - **Auto-Discovery & Serial Targeting**:
-  - Auto-discovers physical USB Dongle via CDC-ACM UART interfaces (`VID 0x1209`, `PID 0x0001`, Protocol ID `0x0002`).
-  - Prioritizes macOS device nodes with suffix '3' (AT data channel, e.g. `/dev/tty.usbmodem*3`) over suffix '1' (Zephyr console logger, Protocol ID `0x0001`).
+  - Auto-discovers connected USB HSM devices via CDC-ACM UART interfaces (`VID 0x1209`, `PID 0x0001`, Protocol ID `0x0002`).
+  - Prioritizes device nodes corresponding to the dedicated AT data communication channel (e.g., macOS `/dev/tty.usbmodem*3`) over diagnostic console logger interfaces (Protocol ID `0x0001`).
   - Supports `NRF52840_HSM_SERIAL` targeting `/dev/tty.usbmodem<SERIAL>3`.
   - Supports `NRF52840_HSM_PORT` override for explicit device paths or virtual pseudo-terminal (PTY) simulation.
   - Supports `NRF52840_HSM_DEBUG=1` for detailed serial protocol traffic traces.
